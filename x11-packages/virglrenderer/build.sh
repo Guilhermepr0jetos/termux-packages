@@ -9,7 +9,7 @@ TERMUX_PKG_AUTO_UPDATE=true
 TERMUX_PKG_DEPENDS="libdrm, libepoxy, libglvnd, libx11, mesa, vulkan-loader"
 TERMUX_PKG_BUILD_DEPENDS="xorgproto"
 TERMUX_PKG_EXTRA_CONFIGURE_ARGS="-Dplatforms=egl,glx -Dvenus=true"
-#teste
+
 termux_step_pre_configure() {
 	# error: using an array subscript expression within 'offsetof' is a Clang extension [-Werror,-Wgnu-offsetof-extensions]
 	# list_for_each_entry_safe(struct vrend_linked_shader_program, ent, &shader->programs, sl[shader->sel->type])
