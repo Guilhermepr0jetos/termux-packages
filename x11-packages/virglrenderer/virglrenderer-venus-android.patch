@@ -44,15 +44,14 @@ index 36478fa7..f5b414df 100644
        ((VkDeviceCreateInfo *)args->pCreateInfo)->enabledExtensionCount = ext_count;
     }
 diff --git a/src/venus/vkr_device_memory.c b/src/venus/vkr_device_memory.c
-index 34e72a5e..fb014bd0 100644
+index 34e72a5e..304280f5 100644
 --- a/src/venus/vkr_device_memory.c
 +++ b/src/venus/vkr_device_memory.c
-@@ -113,6 +113,59 @@ vkr_get_fd_info_from_allocation_info(struct vkr_physical_device *physical_dev,
+@@ -113,6 +113,44 @@ vkr_get_fd_info_from_allocation_info(struct vkr_physical_device *physical_dev,
  
  #else
  
 +#if defined (__ANDROID__)
-+#include <dlfcn.h>
 +#include <android/hardware_buffer.h>
 +#include <vulkan/vulkan_android.h>
 +
@@ -70,17 +69,12 @@ index 34e72a5e..fb014bd0 100644
 +#endif
 +} native_handle_t;
 +
-+typedef int (*pfnAHardwareBuffer_allocate)(const AHardwareBuffer_Desc *desc, AHardwareBuffer **outBuffer);
-+typedef void (*pfnAHardwareBuffer_release)(AHardwareBuffer *buffer);
-+typedef const native_handle_t *(*pfnAHardwareBuffer_getNativeHandle)(const AHardwareBuffer *buffer);
++const native_handle_t *
++AHardwareBuffer_getNativeHandle(const AHardwareBuffer *buffer);
 +
 +struct fake_gbm_bo {
++   int fd;
 +   AHardwareBuffer *base;
-+   void *handle;
-+   size_t size;
-+   pfnAHardwareBuffer_allocate allocate;
-+   pfnAHardwareBuffer_release release;
-+   pfnAHardwareBuffer_getNativeHandle getNativeHandle;
 +};
 +#endif
 +
@@ -89,25 +83,16 @@ index 34e72a5e..fb014bd0 100644
 +vkr_gbm_bo_get_fd(void *gbm_bo)
 +{
 +   struct fake_gbm_bo *bo = gbm_bo;
++   if (!bo)
++      return -1;
 +
-+   const native_handle_t *bo_handle = bo->getNativeHandle(bo->base);
-+   if (bo_handle) {
-+      for (int i = 0u; i < bo_handle->numFds; i++) {
-+         size_t size = lseek(bo_handle->data[i], 0, SEEK_END);
-+         if (size < bo->size)
-+            continue;
-+
-+         return os_dupfd_cloexec(bo_handle->data[i]);
-+      }
-+   }
-+
-+   return -1;
++   return os_dupfd_cloexec(bo->fd);
 +}
 +#else
  static inline int
  vkr_gbm_bo_get_fd(ASSERTED void *gbm_bo)
  {
-@@ -120,14 +173,87 @@ vkr_gbm_bo_get_fd(ASSERTED void *gbm_bo)
+@@ -120,14 +158,88 @@ vkr_gbm_bo_get_fd(ASSERTED void *gbm_bo)
     assert(!gbm_bo);
     return -1;
  }
@@ -121,10 +106,10 @@ index 34e72a5e..fb014bd0 100644
 +   if (!bo)
 +      return;
  
-+   if (bo->base)
-+      bo->release(bo->base);
-+   dlclose(bo->handle);
++   AHardwareBuffer_release(bo->base);
++   close(bo->fd);
 +   free(gbm_bo);
++   return;
 +}
 +#else
  static inline void
@@ -134,7 +119,7 @@ index 34e72a5e..fb014bd0 100644
     assert(!gbm_bo);
  }
 +#endif
- 
++
 +#if defined (__ANDROID__)
 +static VkResult
 +vkr_get_fd_info_from_allocation_info(UNUSED struct vkr_physical_device *physical_dev,
@@ -146,25 +131,6 @@ index 34e72a5e..fb014bd0 100644
 +   if (!bo)
 +      return VK_ERROR_OUT_OF_HOST_MEMORY;
 +
-+   if ((bo->handle = dlopen("libandroid.so", RTLD_NOW)) != NULL) {
-+#define LOAD_SYMBOL(func)                                                                \
-+   if ((bo->func = (pfnAHardwareBuffer_##func)dlsym(                                     \
-+           bo->handle, "AHardwareBuffer_" #func)) == NULL) {                             \
-+      dlclose(bo->handle);                                                               \
-+      free(bo);                                                                          \
-+      return VK_ERROR_INITIALIZATION_FAILED;                                             \
-+   }
-+
-+      LOAD_SYMBOL(allocate)
-+      LOAD_SYMBOL(release)
-+      LOAD_SYMBOL(getNativeHandle)
-+#undef LOAD_SYMBOL
-+   } else {
-+      free(bo);
-+      return VK_ERROR_INITIALIZATION_FAILED;
-+   }
-+   bo->size = alloc_info->allocationSize;
-+
 +   AHardwareBuffer_Desc bo_desc = {
 +      .width = alloc_info->allocationSize,
 +      .height = 1,
@@ -174,9 +140,27 @@ index 34e72a5e..fb014bd0 100644
 +               AHARDWAREBUFFER_USAGE_CPU_READ_RARELY |
 +               AHARDWAREBUFFER_USAGE_CPU_WRITE_RARELY,
 +   };
-+
-+   if (bo->allocate(&bo_desc, &bo->base))
+ 
++   if (AHardwareBuffer_allocate(&bo_desc, &bo->base))
 +      goto error_free_bo;
++
++   const native_handle_t *bo_handle = AHardwareBuffer_getNativeHandle(bo->base);
++   if (!bo_handle)
++      goto error_free_base;
++
++   bo->fd = -1;
++
++   for (int i = 0u; i < bo_handle->numFds; i++) {
++      size_t size = lseek(bo_handle->data[i], 0, SEEK_END);
++      if (size < alloc_info->allocationSize)
++         continue;
++
++      bo->fd = os_dupfd_cloexec(bo_handle->data[i]);
++      break;
++   }
++
++   if (bo->fd < 0)
++      goto error_free_base;
 +
 +   VkImportAndroidHardwareBufferInfoANDROID *out_hwb_info = (void *)out_fd_info;
 +   *out_gbm_bo = bo;
@@ -187,15 +171,17 @@ index 34e72a5e..fb014bd0 100644
 +   };
 +   return VK_SUCCESS;
 +
++error_free_base:
++   AHardwareBuffer_release(bo->base);
 +error_free_bo:
-+   vkr_gbm_bo_destroy(bo);
++   free(bo);
 +   return VK_ERROR_OUT_OF_DEVICE_MEMORY;
 +}
 +#else
  static inline VkResult
  vkr_get_fd_info_from_allocation_info(UNUSED struct vkr_physical_device *physical_dev,
                                       UNUSED const VkMemoryAllocateInfo *alloc_info,
-@@ -137,6 +263,7 @@ vkr_get_fd_info_from_allocation_info(UNUSED struct vkr_physical_device *physical
+@@ -137,6 +249,7 @@ vkr_get_fd_info_from_allocation_info(UNUSED struct vkr_physical_device *physical
     vkr_log("minigbm_allocation is not enabled");
     return VK_ERROR_OUT_OF_DEVICE_MEMORY;
  }
@@ -203,7 +189,7 @@ index 34e72a5e..fb014bd0 100644
  
  #endif /* ENABLE_MINIGBM_ALLOCATION */
  
-@@ -243,6 +370,23 @@ vkr_dispatch_vkAllocateMemory(struct vn_dispatch_context *dispatch,
+@@ -243,6 +356,23 @@ vkr_dispatch_vkAllocateMemory(struct vn_dispatch_context *dispatch,
           valid_fd_types |= 1 << VIRGL_RESOURCE_FD_DMABUF;
     }
  
@@ -268,10 +254,21 @@ index 080b4425..3c2a22fd 100644
     args->ret = vk->GetImageDrmFormatModifierPropertiesEXT(args->device, args->image,
                                                            args->pProperties);
 diff --git a/src/venus/vkr_physical_device.c b/src/venus/vkr_physical_device.c
-index c463064b..20d6c0a9 100644
+index c463064b..3e27c8b5 100644
 --- a/src/venus/vkr_physical_device.c
 +++ b/src/venus/vkr_physical_device.c
-@@ -236,6 +236,22 @@ vkr_physical_device_init_extensions(struct vkr_physical_device *physical_dev,
+@@ -48,6 +48,10 @@ vkr_physical_device_get_gbm_device(void)
+ static inline void *
+ vkr_physical_device_get_gbm_device(void)
+ {
++#if defined (__ANDROID__)
++   if (getenv("ANDROID_VENUS"))
++      return malloc(0);
++#endif
+    return NULL;
+ }
+ 
+@@ -236,6 +240,22 @@ vkr_physical_device_init_extensions(struct vkr_physical_device *physical_dev,
        }
     }
  
@@ -294,7 +291,7 @@ index c463064b..20d6c0a9 100644
     if (physical_dev->KHR_external_fence_fd) {
        const VkPhysicalDeviceExternalFenceInfo fence_info = {
           .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_EXTERNAL_FENCE_INFO,
-@@ -611,9 +627,36 @@ vkr_dispatch_vkGetPhysicalDeviceFormatProperties2(
+@@ -611,9 +631,36 @@ vkr_dispatch_vkGetPhysicalDeviceFormatProperties2(
     UNUSED struct vn_dispatch_context *dispatch,
     struct vn_command_vkGetPhysicalDeviceFormatProperties2 *args)
  {
@@ -331,7 +328,7 @@ index c463064b..20d6c0a9 100644
  }
  
  static void
-@@ -621,6 +664,20 @@ vkr_dispatch_vkGetPhysicalDeviceImageFormatProperties2(
+@@ -621,6 +668,20 @@ vkr_dispatch_vkGetPhysicalDeviceImageFormatProperties2(
     UNUSED struct vn_dispatch_context *dispatch,
     struct vn_command_vkGetPhysicalDeviceImageFormatProperties2 *args)
  {
@@ -352,3 +349,31 @@ index c463064b..20d6c0a9 100644
     vn_replace_vkGetPhysicalDeviceImageFormatProperties2_args_handle(args);
     args->ret = vkGetPhysicalDeviceImageFormatProperties2(
        args->physicalDevice, args->pImageFormatInfo, args->pImageFormatProperties);
+diff --git a/vtest/vtest_main.c b/vtest/vtest_main.c
+index ba53f453..20360c02 100644
+--- a/vtest/vtest_main.c
++++ b/vtest/vtest_main.c
+@@ -24,7 +24,23 @@
+ 
+ #include "vtest_server.h"
+ 
++#if defined (__ANDROID__)
++#include <stdlib.h>
++#endif
++
+ int main(int argc, char** argv) {
++#if defined(__ANDROID__)
++    if (getenv("ANDROID_VENUS")) {
++      char preload[4096] = {0};
++      strcat(preload, getenv("LD_PRELOAD"));
++#if defined(__LP64__)
++      strcat(preload, ":/system/lib64/libvulkan.so");
++#else
++      strcat(preload, ":/system/lib/libvulkan.so");
++#endif
++      setenv("LD_PRELOAD", preload, 1 /* override */);
++    }
++#endif
+     return vtest_main(argc, argv);
+ }
+ 
