@@ -9,7 +9,7 @@ TERMUX_PKG_SHA256=90febd30a098cbcd97ff62ecc3dcf5c93d76f7fa314de944cfce81951ba745
 TERMUX_PKG_DEPENDS="libandroid-shmem, libc++, libdrm, libx11, libxcb, libxshmfence, libwayland, vulkan-loader-generic, zlib, zstd"
 TERMUX_PKG_BUILD_DEPENDS="libwayland-protocols, libxrandr, xorgproto"
 TERMUX_PKG_CONFLICTS="mesa-vulkan-icd-freedreno"
-#teste
+
 TERMUX_PKG_EXTRA_CONFIGURE_ARGS="
 --cmake-prefix-path $TERMUX_PREFIX
 -Dcpp_rtti=false
