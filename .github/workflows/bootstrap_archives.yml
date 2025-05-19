@@ -28,9 +28,9 @@ jobs:
       - name: Git clone
         uses: actions/checkout@v4
       - name: Make bootstrap script executable
-        run: chmod +x ./scripts/build-bootstraps.sh
+        run: chmod +x ./scripts/generate-bootstraps.sh
       - name: Create bootstrap archive
-        run: ./scripts/build-bootstraps.sh --architectures ${{ matrix.arch }}
+        run: ./scripts/generate-bootstraps.sh --architectures ${{ matrix.arch }}
       - name: Store artifacts
         uses: actions/upload-artifact@v4
         with:
