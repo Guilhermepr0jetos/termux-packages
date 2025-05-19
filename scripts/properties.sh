@@ -128,7 +128,7 @@ TERMUX_REGEX__ABSOLUTE_PATH='^(/[^/]+)+$'
 TERMUX_REGEX__RELATIVE_PATH='^[^/]+(/[^/]+)*$'
 
 ##
-# Regex that matches (rootfs `/`) or (an absolute path that starts
+# Regex that matches (rootfs `/`) or (an absolute pfath that starts
 # with a `/`). Duplicate or trailing path separators `/` are not
 # allowed.
 ##
@@ -461,8 +461,8 @@ TERMUX__REPOS_HOST_ORG_URL="https://github.com/$TERMUX__REPOS_HOST_ORG_NAME"
 #
 # Default value: `com.termux`
 ##
-TERMUX_APP__PACKAGE_NAME="com.terminalbackend"
-TERMUX_APP_PACKAGE="$TERMUX_APP__PACKAGE_NAME" # Deprecated alternative variable for `TERMUX_APP__PACKAGE_NAME`
+TERMUX_APP__PACKAGE_NAME="com.termux"
+TERMUX_APP_PACKAGE="com.terminalbackend" # Deprecated alternative variable for `TERMUX_APP__PACKAGE_NAME`
 
 __termux_build_props__add_variables_validator_actions "TERMUX_APP__PACKAGE_NAME" "app_package_name"
 
